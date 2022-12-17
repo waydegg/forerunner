@@ -1,25 +1,39 @@
 import asyncio
 import signal
+from functools import partial
 from inspect import iscoroutinefunction
 from typing import Callable, List, Literal
 
-import structlog
 from ipdb import set_trace
+from structlog import get_logger
 
 from .job import Cron
-
-logger = structlog.get_logger()
+from .module import Module
+from .utils import init_module_jobs
 
 
 class App:
     def __init__(
-        self, *, name: str = "app", global_exception_callbacks: List[Callable] = []
+        self,
+        *,
+        name: str = "app",
+        modules: List[Module] = [],
+        exception_callbacks: List[Callable] = [],
     ):
         self.name = name
-        self.global_exception_callbacks = global_exception_callbacks
+        self.modules = modules
+        self.exception_callbacks = exception_callbacks
 
-        self.logger = logger.bind(app_name=self.name)
-        self.jobs: List[Cron] = []
+        self.logger = get_logger(name=self.name)
+        self.jobs = []
+
+        for module in self.modules:
+            module_jobs = init_module_jobs(
+                app_name=self.name,
+                exception_callbacks=self.exception_callbacks,
+                module=module,
+            )
+            self.jobs.extend(module_jobs)
 
         self.startup_funcs = []
         self.shutdown_funcs = []
@@ -27,16 +41,13 @@ class App:
         self._should_exit = False
         self._force_exit = False
 
-    def on_event(self, event: Literal["startup", "shutdown"]):
-        def _on_event_wrapper(func: Callable):
-            match event:
-                case "startup":
-                    self.startup_funcs.append(func)
-                case "shutdown":
-                    self.shutdown_funcs.append(func)
-            return func
+    def on_startup(self, func: Callable):
+        self.startup_funcs.append(func)
+        return func
 
-        return _on_event_wrapper
+    def on_shutdown(self, func: Callable):
+        self.shutdown_funcs.append(func)
+        return func
 
     def cron(
         self,
@@ -54,9 +65,7 @@ class App:
                 func=func,
                 job_name=func.__name__,
                 app_name=self.name,
-                exception_callbacks=(
-                    self.global_exception_callbacks + exception_callbacks
-                ),
+                exception_callbacks=exception_callbacks,
                 expr=expr,
                 n_workers=n_workers,
                 n_retries=n_retries,
@@ -70,10 +79,38 @@ class App:
         return _cron_wrapper
 
     def timer(self):
-        ...
+        raise NotImplementedError
 
     def sub(self):
-        ...
+        raise NotImplementedError
+
+    async def startup(self):
+        self.logger.info("Starting...")
+        if len(self.startup_funcs) > 0:
+            self.logger.debug("Running startup funcs...")
+            for func in self.startup_funcs:
+                await func() if iscoroutinefunction(func) else func()
+
+    async def shutdown(self):
+        self.logger.info("Shutting down...")
+        for job in self.jobs:
+            job.stop()
+
+        self.logger.info("Waiting for Jobs to finish. (CTRL+C to force quit)")
+        while not self._force_exit:
+            if all([job.is_stopped for job in self.jobs]):
+                break
+            await asyncio.sleep(1)
+
+        if self._force_exit:
+            self.logger.debug("Force exiting. Canceling all jobs...")
+            for job in self.jobs:
+                job.cancel()
+
+        if len(self.shutdown_funcs) > 0:
+            self.logger.debug("Running shutdown funcs...")
+            for func in self.shutdown_funcs:
+                await func() if iscoroutinefunction(func) else func()
 
     async def _main_loop(self):
         self.logger.info("Running...")
@@ -104,40 +141,6 @@ class App:
         loop = asyncio.get_event_loop()
         for sig in [signal.SIGINT, signal.SIGTERM]:
             loop.add_signal_handler(sig, self._handle_exit, sig)
-
-    async def startup(self):
-        self.logger.info("Starting...")
-        if len(self.startup_funcs) > 0:
-            self.logger.debug("Running startup funcs...")
-            for func in self.startup_funcs:
-                if iscoroutinefunction(func):
-                    await func()
-                else:
-                    func()
-
-    async def shutdown(self):
-        self.logger.info("Shutting down...")
-        for job in self.jobs:
-            job.stop()
-
-        self.logger.info("Waiting for Jobs to finish. (CTRL+C to force quit)")
-        while not self._force_exit:
-            if all([job.is_stopped for job in self.jobs]):
-                break
-            await asyncio.sleep(1)
-
-        if self._force_exit:
-            self.logger.debug("Force exiting. Canceling all jobs...")
-            for job in self.jobs:
-                job.cancel()
-
-        if len(self.shutdown_funcs) > 0:
-            self.logger.debug("Running shutdown funcs...")
-            for func in self.shutdown_funcs:
-                if iscoroutinefunction(func):
-                    await func()
-                else:
-                    func()
 
     async def _run(self):
         await self.startup()

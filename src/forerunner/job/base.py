@@ -32,7 +32,7 @@ class Job:
         self.execution = execution
         self.strategy = strategy
 
-        self.logger = logger.bind(app_name=self.app_name, job_name=self.job_name)
+        self.logger = logger.bind(name=f"{self.app_name}.{self.job_name}")
 
         self._start_task = None
         self._stop_task = None
