@@ -1,6 +1,5 @@
 import asyncio
 import signal
-from functools import partial
 from inspect import iscoroutinefunction
 from typing import Callable, List, Literal
 
@@ -24,7 +23,7 @@ class App:
         self.modules = modules
         self.exception_callbacks = exception_callbacks
 
-        self.logger = get_logger(name=self.name)
+        self.logger = get_logger(app=self.name)
         self.jobs = []
 
         for module in self.modules:

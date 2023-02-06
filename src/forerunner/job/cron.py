@@ -1,17 +1,10 @@
 import asyncio
-import inspect
-import sys
-import traceback
 from datetime import datetime
-from typing import Callable, List, Literal, cast
 
-import structlog
 from croniter import croniter
 from ipdb import set_trace
 
 from .base import Job
-
-logger = structlog.get_logger()
 
 
 class Cron(Job):
@@ -47,7 +40,7 @@ class Cron(Job):
 
         while True:
             sleep_sec = self._get_sleep_sec()
-            self.logger.debug(f"Sleeping {sleep_sec} seconds...")
+            self.logger.debug(f"Sleeping...", seconds=sleep_sec)
             await asyncio.sleep(sleep_sec)
 
             match self.strategy:

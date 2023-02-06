@@ -2,10 +2,13 @@ import asyncio
 import inspect
 import sys
 import traceback
-from typing import Callable, List, Literal
+from functools import cache
+from typing import Any, Callable, Dict, List, Literal, Tuple
 
 import structlog
 from ipdb import set_trace
+
+from forerunner.depends import Depends, Depends_
 
 logger = structlog.get_logger()
 
@@ -32,7 +35,7 @@ class Job:
         self.execution = execution
         self.strategy = strategy
 
-        self.logger = logger.bind(name=f"{self.app_name}.{self.job_name}")
+        self.logger = logger.bind(app=f"{self.app_name}.{self.job_name}")
 
         self._start_task = None
         self._stop_task = None
@@ -54,6 +57,41 @@ class Job:
 
     def _run_as_process(self):
         raise NotImplementedError
+
+    def _get_func_args(self):
+        ...
+
+    async def _get_func_kwargs(self):
+        ...
+
+    @cache
+    def _get_dependency_kwargs(self) -> Dict[str, Depends_]:
+        dependency_kwargs = {}
+
+        signature = inspect.signature(self.func)
+        for param_name, param in signature.parameters.items():
+            if type(param.default) == Depends_:
+                dependency_kwargs[param_name] = param.default
+
+        return dependency_kwargs
+
+    async def solve_dependencies(self) -> Dict[str, Any]:
+        dependency_results = {}
+
+        dependency_kwargs = self._get_dependency_kwargs()
+        for name, dependency in dependency_kwargs.items():
+            dependency_func = dependency.dependency
+            if inspect.iscoroutinefunction(dependency_func):
+                dependency_results[name] = await dependency_func()
+            else:
+                dependency_results[name] = dependency_func()
+
+        return dependency_results
+
+    async def _func_wrapper(self):
+        dependency_results = await self.solve_dependencies()
+        set_trace()
+        await self.func(**dependency_results)
 
     def _create_worker_task(self):
         def callback(task: asyncio.Task):
@@ -85,7 +123,8 @@ class Job:
                 self._worker_tasks.remove(task)
 
         self.logger.debug("Running func...")
-        worker_fut = asyncio.ensure_future(self.func())
+        # worker_fut = asyncio.ensure_future(self.func())
+        worker_fut = asyncio.ensure_future(self._func_wrapper())
         worker_fut.add_done_callback(callback)
         asyncio.shield(worker_fut)
         self._worker_tasks.append(worker_fut)
