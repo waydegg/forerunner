@@ -2,13 +2,15 @@ import asyncio
 import inspect
 import sys
 import traceback
+from contextlib import AsyncExitStack, asynccontextmanager
 from functools import cache
 from typing import Any, Callable, Dict, List, Literal, Tuple
 
 import structlog
 from ipdb import set_trace
 
-from forerunner.depends import Depends, Depends_
+from forerunner.dependency.depends import Depends
+from forerunner.dependency.utils import resolve_dependencies
 
 logger = structlog.get_logger()
 
@@ -65,33 +67,22 @@ class Job:
         ...
 
     @cache
-    def _get_dependency_kwargs(self) -> Dict[str, Depends_]:
+    def _get_dependency_kwargs(self) -> Dict[str, Depends]:
         dependency_kwargs = {}
 
         signature = inspect.signature(self.func)
         for param_name, param in signature.parameters.items():
-            if type(param.default) == Depends_:
+            if type(param.default) == Depends:
                 dependency_kwargs[param_name] = param.default
 
         return dependency_kwargs
 
-    async def solve_dependencies(self) -> Dict[str, Any]:
-        dependency_results = {}
-
-        dependency_kwargs = self._get_dependency_kwargs()
-        for name, dependency in dependency_kwargs.items():
-            dependency_func = dependency.dependency
-            if inspect.iscoroutinefunction(dependency_func):
-                dependency_results[name] = await dependency_func()
-            else:
-                dependency_results[name] = dependency_func()
-
-        return dependency_results
-
     async def _func_wrapper(self):
-        dependency_results = await self.solve_dependencies()
-        set_trace()
-        await self.func(**dependency_results)
+        async with AsyncExitStack() as stack:
+            dependency_results = await resolve_dependencies(
+                dependencies=self._get_dependency_kwargs(), stack=stack
+            )
+            await self.func(**dependency_results)
 
     def _create_worker_task(self):
         def callback(task: asyncio.Task):

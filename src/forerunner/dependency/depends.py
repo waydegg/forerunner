@@ -1,13 +1,13 @@
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 
-def Depends(  # noqa: N802
+def depends_func(  # noqa: N802
     dependency: Callable[..., Any], *, use_cache: bool = True
 ) -> Any:
-    return Depends_(dependency=dependency, use_cache=use_cache)
+    return Depends(dependency=dependency, use_cache=use_cache)
 
 
-class Depends_:
+class Depends:
     def __init__(self, dependency: Callable[..., Any], *, use_cache: bool = True):
         self.dependency = dependency
         self.use_cache = use_cache

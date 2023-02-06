@@ -1,4 +1,4 @@
 from .app import App, Module
-from .depends import Depends
+from .dependency.depends import depends_func as Depends
 
 __all__ = ["App", "Module", "Depends"]
