@@ -33,10 +33,14 @@ class Cron(Job):
         if self.eager:
             task = self._create_worker_task()
             if task is not None:
-                try:
-                    await task
-                except:
-                    pass  # Do nothing; let task callback handle Exception
+                await task
+                # try:
+                #     await task
+                # except Exception as e:
+                #     set_trace()
+                #     raise e
+            # set_trace()
+            # pass  # Do nothing; let task callback handle Exception
 
         while True:
             sleep_sec = self._get_sleep_sec()

@@ -4,7 +4,7 @@ import sys
 import traceback
 from contextlib import AsyncExitStack, asynccontextmanager
 from functools import cache
-from typing import Any, Callable, Dict, List, Literal, Tuple
+from typing import Any, Callable, Dict, List, Literal, Tuple, cast
 
 import structlog
 from ipdb import set_trace
@@ -39,14 +39,19 @@ class Job:
 
         self.logger = logger.bind(app=f"{self.app_name}.{self.job_name}")
 
-        self._start_task = None
-        self._stop_task = None
-        self._worker_tasks = []
-        self._exception_callback_tasks = []
+        self._task: asyncio.Task | None = None
+        self._worker_tasks: List[asyncio.Task] = []
+        self._exception_callback_tasks: List[asyncio.Task] = []
+        self._stop_task: asyncio.Task | None = None
 
     @property
     def is_stopped(self):
-        return self._start_task is None and self._stop_task is None
+        return (
+            self._task is None
+            and self._stop_task is None
+            and len(self._worker_tasks) == 0
+            and len(self._exception_callback_tasks) == 0
+        )
 
     def _run_as_main(self):
         raise NotImplementedError
@@ -77,46 +82,48 @@ class Job:
 
         return dependency_kwargs
 
-    async def _func_wrapper(self):
-        async with AsyncExitStack() as stack:
-            dependency_results = await resolve_dependencies(
-                dependencies=self._get_dependency_kwargs(), stack=stack
-            )
-            await self.func(**dependency_results)
-
     def _create_worker_task(self):
         def callback(task: asyncio.Task):
+            self._worker_tasks.remove(task)
+
+        async def run_func():
             try:
-                task.result()
+                async with AsyncExitStack() as stack:
+                    # Get dependency results
+                    dependency_results = await resolve_dependencies(
+                        dependencies=self._get_dependency_kwargs(), stack=stack
+                    )
+                    # Run function
+                    await self.func(**dependency_results)
             except asyncio.CancelledError as e:
-                pass  # Task cancellation should not be ignored
+                pass
             except Exception as e:
                 exc_info = sys.exc_info()
                 traceback_str = "".join(traceback.format_exception(*exc_info))
                 self.logger.error(
                     f"Exception rasied by wrapped func",
-                    task_name=task.get_name(),
-                    exception=e.__repr__(),
                     traceback=traceback_str,
+                    exception_repr=e.__repr__(),
                 )
 
-                for cb in self.exception_callbacks:
-                    if inspect.iscoroutinefunction(cb):
-                        cb_task = asyncio.create_task(cb(self, e))
-                        self._exception_callback_tasks.append(cb_task)
-                    else:
-                        cb(self, e)
+                # for cb in self.exception_callbacks:
+                #     if inspect.iscoroutinefunction(cb):
+                #         cb_task = asyncio.create_task(cb(self, e))
+                #         self._exception_callback_tasks.append(cb_task)
+                #     else:
+                #         cb(self, e)
 
                 # TODO: implement retrying logic and don't shutdown entire Job on 1
                 # unhandled Exception
                 self.stop()
-            finally:
-                self._worker_tasks.remove(task)
 
         self.logger.debug("Running func...")
+
+        # worker_fut = asyncio.ensure_future(self._func_wrapper())
         # worker_fut = asyncio.ensure_future(self.func())
-        worker_fut = asyncio.ensure_future(self._func_wrapper())
+        worker_fut = asyncio.ensure_future(run_func())
         worker_fut.add_done_callback(callback)
+
         asyncio.shield(worker_fut)
         self._worker_tasks.append(worker_fut)
 
@@ -126,39 +133,27 @@ class Job:
         raise NotImplementedError
 
     def start(self):
-        if self._start_task:
+        if self._task:
             self.logger.warning("Job already started")
-            return self._start_task
 
-        async def _start():
-            try:
-                await self._main()
-            except asyncio.CancelledError:
-                raise  # Propagate CancelledError for `.stop()` sequence
-            except Exception as e:
-                exc_info = sys.exc_info()
-                traceback_str = "".join(traceback.format_exception(*exc_info))
-                self.logger.error(
-                    f"Exception rasied by main func",
-                    task_name="_start",
-                    exception=e.__repr__(),
-                    traceback=traceback_str,
-                )
+        def callback(_):
+            self._task = None
 
-        self._start_task = asyncio.create_task(_start())
-
-        return self._start_task
+        self._task = asyncio.create_task(self._main())
+        self._task.add_done_callback(callback)
 
     def stop(self):
-        if self._stop_task:
-            self.logger.warning("Job already stopping")
-            return self._stop_task
+        if self.is_stopped:
+            self.logger.warning("Job already stopped")
+            return
 
-        async def _stop():
-            assert isinstance(self._start_task, asyncio.Task)
-            # Wait for start task to cancel
-            self._start_task.cancel()
-            while not self._start_task.cancelled():
+        def callback(_):
+            self._stop_task = None
+
+        async def stop_():
+            # Wait for main task to cancel
+            cast(asyncio.Task, self._task).cancel()
+            while self._task is not None:
                 await asyncio.sleep(0.1)
 
             # Wait for worker tasks and exception callback tasks to finish
@@ -168,20 +163,15 @@ class Job:
                     break
                 await asyncio.sleep(0.1)
 
-            # Set start/stop tasks to `None`
-            self._start_task = None
-            self._stop_task = None
-
-        self._stop_task = asyncio.create_task(_stop())
-
-        return self._stop_task
+        self._stop_task = asyncio.create_task(stop_())
+        self._stop_task.add_done_callback(callback)
 
     def cancel(self):
-        if self._start_task:
-            self._start_task.cancel()
-            self._start_task = None
         if self._stop_task:
             self._stop_task.cancel()
             self._stop_task = None
+        if self._task:
+            self._task.cancel()
+            self._task = None
         for task in self._worker_tasks + self._exception_callback_tasks:
             task.cancel()

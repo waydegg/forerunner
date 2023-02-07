@@ -99,7 +99,7 @@ class App:
         while not self._force_exit:
             if all([job.is_stopped for job in self.jobs]):
                 break
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.25)
 
         if self._force_exit:
             self.logger.debug("Force exiting. Canceling all jobs...")
