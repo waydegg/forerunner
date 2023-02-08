@@ -93,6 +93,8 @@ class App:
     async def shutdown(self):
         self.logger.info("Shutting down...")
         for job in self.jobs:
+            if job.is_stopped:
+                continue
             job.stop()
 
         self.logger.info("Waiting for Jobs to finish. (CTRL+C to force quit)")
