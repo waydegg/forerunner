@@ -2,9 +2,9 @@ import asyncio
 import inspect
 import sys
 import traceback
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack
 from functools import cache
-from typing import Any, Callable, Dict, List, Literal, Tuple, cast
+from typing import Callable, Dict, List, Literal, cast
 
 import structlog
 from ipdb import set_trace
@@ -90,20 +90,40 @@ class Job:
             try:
                 async with AsyncExitStack() as stack:
                     # Get dependency results
-                    dependency_results = await resolve_dependencies(
-                        dependencies=self._get_dependency_kwargs(), stack=stack
-                    )
+                    try:
+                        dependency_results = await resolve_dependencies(
+                            dependencies=self._get_dependency_kwargs(), stack=stack
+                        )
+                    except Exception as e:
+                        self.logger.error("Exception raised by dependency")
+                        raise e
                     # Run function
                     await self.func(**dependency_results)
+
+                # stack = AsyncExitStack()
+                # try:
+                #     dependency_results = await resolve_dependencies(
+                #         dependencies=self._get_dependency_kwargs(), stack=stack
+                #     )
+                # except Exception as e:
+                #     set_trace()
+                #     await stack.aclose()
+                #     self.logger.error("Exception raised by dependency")
+                #     raise e
+                # else:
+                #     # Run function
+                #     await self.func(**dependency_results)
+                #
+                #     # Close any context managers in the stack
+                #     await stack.aclose()
+
             except asyncio.CancelledError as e:
                 pass
             except Exception as e:
                 exc_info = sys.exc_info()
                 traceback_str = "".join(traceback.format_exception(*exc_info))
                 self.logger.error(
-                    f"Exception rasied by wrapped func",
-                    traceback=traceback_str,
-                    exception_repr=e.__repr__(),
+                    "Exception rasied by wrapped func", traceback=traceback_str
                 )
 
                 # for cb in self.exception_callbacks:
