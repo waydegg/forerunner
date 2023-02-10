@@ -26,7 +26,7 @@ class Job:
         n_workers: int,
         n_retries: int,
         execution: Literal["sync", "async", "thread", "process"],
-        strategy: Literal["burst", "overlap"],
+        pub: asyncio.Queue | None = None,
     ):
         self.func = func
         self.job_name = job_name
@@ -35,7 +35,7 @@ class Job:
         self.n_workers = n_workers
         self.n_retries = n_retries
         self.execution = execution
-        self.strategy = strategy
+        self.pub = pub
 
         self.logger = logger.bind(app=f"{self.app_name}.{self.job_name}")
 
@@ -82,12 +82,13 @@ class Job:
 
         return dependency_kwargs
 
-    def _create_worker_task(self):
+    def _create_worker_task(self, *args, **kwargs):
         def callback(task: asyncio.Task):
             self._worker_tasks.remove(task)
 
         async def run_func():
             try:
+                # Enter context manager stacks (for any dependencies)
                 async with AsyncExitStack() as stack:
                     # Get dependency results
                     try:
@@ -97,25 +98,14 @@ class Job:
                     except Exception as e:
                         self.logger.error("Exception raised by dependency")
                         raise e
-                    # Run function
-                    await self.func(**dependency_results)
 
-                # stack = AsyncExitStack()
-                # try:
-                #     dependency_results = await resolve_dependencies(
-                #         dependencies=self._get_dependency_kwargs(), stack=stack
-                #     )
-                # except Exception as e:
-                #     set_trace()
-                #     await stack.aclose()
-                #     self.logger.error("Exception raised by dependency")
-                #     raise e
-                # else:
-                #     # Run function
-                #     await self.func(**dependency_results)
-                #
-                #     # Close any context managers in the stack
-                #     await stack.aclose()
+                    # Run the job function
+                    res = await self.func(*args, **kwargs, **dependency_results)
+
+                    # Publish result to any queues
+                    if self.pub:
+                        logger.debug("publishing to queue")
+                        await self.pub.put(res)
 
             except asyncio.CancelledError as e:
                 pass
@@ -126,6 +116,7 @@ class Job:
                     "Exception rasied by wrapped func", traceback=traceback_str
                 )
 
+                # TODO: remove exception_callbacks on finish
                 # for cb in self.exception_callbacks:
                 #     if inspect.iscoroutinefunction(cb):
                 #         cb_task = asyncio.create_task(cb(self, e))
@@ -138,12 +129,9 @@ class Job:
                 self.stop()
 
         self.logger.debug("Running func...")
-
-        # worker_fut = asyncio.ensure_future(self._func_wrapper())
-        # worker_fut = asyncio.ensure_future(self.func())
+        # NOTE: why does this need to be a future and not a task?
         worker_fut = asyncio.ensure_future(run_func())
         worker_fut.add_done_callback(callback)
-
         asyncio.shield(worker_fut)
         self._worker_tasks.append(worker_fut)
 

@@ -32,24 +32,14 @@ class Cron(Job):
     async def _main(self):
         if self.eager:
             task = self._create_worker_task()
+            # NOTE: why can `task` be `None` here?
             if task is not None:
                 await task
-                # try:
-                #     await task
-                # except Exception as e:
-                #     set_trace()
-                #     raise e
-            # set_trace()
-            # pass  # Do nothing; let task callback handle Exception
 
         while True:
             sleep_sec = self._get_sleep_sec()
             self.logger.debug(f"Sleeping...", seconds=sleep_sec)
             await asyncio.sleep(sleep_sec)
 
-            match self.strategy:
-                case "burst":
-                    while len(self._worker_tasks) < self.n_workers:
-                        self._create_worker_task()
-                case "overlap":
-                    raise NotImplementedError
+            while len(self._worker_tasks) < self.n_workers:
+                self._create_worker_task()

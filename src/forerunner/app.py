@@ -6,6 +6,8 @@ from typing import Callable, List, Literal
 from ipdb import set_trace
 from structlog import get_logger
 
+from forerunner.job.sub import Sub
+
 from .job import Cron
 from .module import Module
 from .utils import init_module_jobs
@@ -56,8 +58,8 @@ class App:
         n_retries: int = 0,
         execution: Literal["sync", "async", "thread", "process"] = "async",
         eager: bool = False,
-        strategy: Literal["burst", "overlap"] = "burst",
         exception_callbacks: List[Callable] = [],
+        pub: asyncio.Queue | None = None,
     ):
         def _cron_wrapper(func: Callable):
             job = Cron(
@@ -70,7 +72,7 @@ class App:
                 n_retries=n_retries,
                 execution=execution,
                 eager=eager,
-                strategy=strategy,
+                pub=pub,
             )
             self.jobs.append(job)
             return func
@@ -80,8 +82,30 @@ class App:
     def timer(self):
         raise NotImplementedError
 
-    def sub(self):
-        raise NotImplementedError
+    def sub(
+        self,
+        queue: asyncio.Queue,
+        *,
+        n_workers: int = 1,
+        n_retries: int = 0,
+        execution: Literal["sync", "async", "thread", "process"] = "async",
+        exception_callbacks: List[Callable] = [],
+    ):
+        def _sub_wrapper(func: Callable):
+            job = Sub(
+                func=func,
+                job_name=func.__name__,
+                app_name=self.name,
+                queue=queue,
+                exception_callbacks=exception_callbacks,
+                n_workers=n_workers,
+                n_retries=n_retries,
+                execution=execution,
+            )
+            self.jobs.append(job)
+            return func
+
+        return _sub_wrapper
 
     async def startup(self):
         self.logger.info("Starting...")
