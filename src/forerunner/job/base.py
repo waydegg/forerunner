@@ -11,6 +11,7 @@ from ipdb import set_trace
 
 from forerunner.dependency.depends import Depends
 from forerunner.dependency.utils import resolve_dependencies
+from forerunner.queue import AsyncQueue
 
 logger = structlog.get_logger()
 
@@ -26,7 +27,7 @@ class Job:
         n_workers: int,
         n_retries: int,
         execution: Literal["sync", "async", "thread", "process"],
-        pub: asyncio.Queue | None = None,
+        pub: AsyncQueue | None = None,
     ):
         self.func = func
         self.job_name = job_name
@@ -100,12 +101,16 @@ class Job:
                         raise e
 
                     # Run the job function
+                    # TODO: handle running sync, async, thread, or process here
                     res = await self.func(*args, **kwargs, **dependency_results)
 
                     # Publish result to any queues
                     if self.pub:
-                        logger.debug("publishing to queue")
-                        await self.pub.put(res)
+                        if self.pub.full():
+                            logger.warning("Queue is full", queue=self.pub.__repr__())
+                        else:
+                            logger.debug("Publishing to queue")
+                            self.pub.put_nowait(res)
 
             except asyncio.CancelledError as e:
                 pass
@@ -129,7 +134,9 @@ class Job:
                 self.stop()
 
         self.logger.debug("Running func...")
+
         # NOTE: why does this need to be a future and not a task?
+        # worker_fut = asyncio.create_task(run_func())
         worker_fut = asyncio.ensure_future(run_func())
         worker_fut.add_done_callback(callback)
         asyncio.shield(worker_fut)
@@ -144,35 +151,51 @@ class Job:
         if self._task:
             self.logger.warning("Job already started")
 
-        def callback(_):
-            self._task = None
+        async def start_():
+            try:
+                await self._main()
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._task = None
+                self.logger.debug("Main task stopped")
 
-        self._task = asyncio.create_task(self._main())
-        self._task.add_done_callback(callback)
+        self._task = asyncio.create_task(start_())
 
     def stop(self):
+        # Job already stopping
+        if self._stop_task is not None:
+            return
+        # Job already stopped
         if self.is_stopped:
-            self.logger.warning("Job already stopped")
             return
 
-        def callback(_):
-            self._stop_task = None
-
         async def stop_():
-            # Wait for main task to cancel
-            cast(asyncio.Task, self._task).cancel()
-            while self._task is not None:
-                await asyncio.sleep(0.1)
+            try:
+                assert isinstance(self._task, asyncio.Task)
 
-            # Wait for worker tasks and exception callback tasks to finish
-            self.logger.debug("Waiting for worker and exception callback tasks...")
-            while True:
-                if len(self._worker_tasks + self._exception_callback_tasks) == 0:
-                    break
-                await asyncio.sleep(0.1)
+                # Wait for main task to cancel
+                self._task.cancel()
+                while self._task is not None:
+                    await asyncio.sleep(0.1)
+                    # # NOTE: `.cancel` has to be called twice for Sub whenever there's a
+                    # # worker still running
+                    # if self._task is not None:
+                    #     self._task.cancel()
+
+                # Wait for worker tasks and exception callback tasks to finish
+                self.logger.debug("Waiting for worker and exception callback tasks...")
+                while True:
+                    if len(self._worker_tasks + self._exception_callback_tasks) == 0:
+                        break
+                    await asyncio.sleep(0.1)
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._stop_task = None
+                self.logger.debug("Job has stopped")
 
         self._stop_task = asyncio.create_task(stop_())
-        self._stop_task.add_done_callback(callback)
 
     def cancel(self):
         if self._stop_task:

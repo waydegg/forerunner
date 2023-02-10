@@ -10,6 +10,7 @@ from forerunner.job.sub import Sub
 
 from .job import Cron
 from .module import Module
+from .queue import AsyncQueue
 from .utils import init_module_jobs
 
 
@@ -59,7 +60,7 @@ class App:
         execution: Literal["sync", "async", "thread", "process"] = "async",
         eager: bool = False,
         exception_callbacks: List[Callable] = [],
-        pub: asyncio.Queue | None = None,
+        pub: AsyncQueue | None = None,
     ):
         def _cron_wrapper(func: Callable):
             job = Cron(
@@ -125,7 +126,7 @@ class App:
         while not self._force_exit:
             if all([job.is_stopped for job in self.jobs]):
                 break
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.1)
 
         if self._force_exit:
             self.logger.debug("Force exiting. Canceling all jobs...")
@@ -136,6 +137,8 @@ class App:
             self.logger.debug("Running shutdown funcs...")
             for func in self.shutdown_funcs:
                 await func() if iscoroutinefunction(func) else func()
+
+        self.logger.info("App has stopped")
 
     async def _main_loop(self):
         self.logger.info("Running...")
