@@ -22,4 +22,4 @@ class Sub(Job):
             while payload is None:
                 payload = await self.queue.poll()
 
-            await self._create_worker_task(payload=payload)
+            self._create_worker_task(payload=payload)

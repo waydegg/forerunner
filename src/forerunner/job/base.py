@@ -145,14 +145,10 @@ class Job:
 
         self.logger.debug("Running func...")
 
-        # NOTE: why does this need to be a future and not a task?
-        # worker_fut = asyncio.create_task(run_func())
-        worker_fut = asyncio.ensure_future(run_func())
-        worker_fut.add_done_callback(callback)
-        asyncio.shield(worker_fut)
-        self._worker_tasks.append(worker_fut)
-
-        return worker_fut
+        worker_task = asyncio.create_task(run_func())
+        worker_task.add_done_callback(callback)
+        asyncio.shield(worker_task)
+        self._worker_tasks.append(worker_task)
 
     async def _main(self):
         raise NotImplementedError

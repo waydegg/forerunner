@@ -34,10 +34,8 @@ class Cron(Job):
 
     async def _main(self):
         if self.eager:
-            task = self._create_worker_task()
-            # NOTE: why can `task` be `None` here?
-            if task is not None:
-                await task
+            await self._worker_sem.acquire()
+            self._create_worker_task()
 
         while True:
             sleep_sec = self._get_sleep_sec()
