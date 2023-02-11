@@ -18,6 +18,7 @@ class Sub(Job):
         while True:
             await self._worker_sem.acquire()
 
+            # NOTE: polling is infinite with no pauses between polls
             payload = None
             while payload is None:
                 payload = await self.queue.poll()

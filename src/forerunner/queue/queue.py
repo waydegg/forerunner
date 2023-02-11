@@ -1,42 +1,47 @@
 import asyncio
-from abc import ABC
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
 
-class AsyncQueue(asyncio.Queue):
-    def __init__(self, name: str | None = None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.name = name
-
-    def __repr__(self):
-        memory_addr = hex(id(self))
-        parts = [f"size={self.qsize()}", f"maxsize={self.maxsize}"]
-        parts_str = " ".join(parts)
-
-        return f"<AsyncQueue({self.name or ''}) at {memory_addr} ({parts_str})>"
-
-
-# class BasePayload(ABC):
-#     @property
-#     def ack_id(self) -> Any:
-#         ...
-
-
 @dataclass
-class BasePayload:
+class BasePayload(ABC):
     ack_id: Any
 
 
-class BaseQueue:
-    def __init__(self):
-        ...
-
+class BaseQueue(ABC):
+    @abstractmethod
     async def poll(self) -> BasePayload | None:
         ...
 
+    @abstractmethod
     async def push(self, payload):
         ...
 
+    @abstractmethod
     async def ack(self, payload):
         ...
+
+
+@dataclass
+class AsyncQueuePayload(BasePayload):
+    ack_id: None
+    data: Any
+
+
+class AsyncQueue(BaseQueue):
+    def __init__(self, name: str | None = None):
+        self.name = name
+        self.queue = asyncio.Queue()
+
+    async def poll(self):
+        res = await self.queue.get()
+        payload = AsyncQueuePayload(ack_id=None, data=res)
+
+        return payload
+
+    async def push(self, payload):
+        await self.queue.put(payload)
+
+    async def ack(self, _):
+        pass
