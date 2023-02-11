@@ -7,6 +7,7 @@ from ipdb import set_trace
 from structlog import get_logger
 
 from forerunner.job.sub import Sub
+from forerunner.queue.queue import BaseQueue
 
 from .job import Cron
 from .module import Module
@@ -60,7 +61,7 @@ class App:
         execution: Literal["sync", "async", "thread", "process"] = "async",
         eager: bool = False,
         exception_callbacks: List[Callable] = [],
-        pub: AsyncQueue | None = None,
+        pub: BaseQueue | None = None,
     ):
         def _cron_wrapper(func: Callable):
             job = Cron(
@@ -85,7 +86,7 @@ class App:
 
     def sub(
         self,
-        queue: asyncio.Queue,
+        queue: BaseQueue,
         *,
         n_workers: int = 1,
         n_retries: int = 0,

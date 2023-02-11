@@ -1,13 +1,13 @@
-import asyncio
-from asyncio.exceptions import TimeoutError
+from contextlib import AsyncExitStack
 
-from ipdb import set_trace
+from forerunner.dependency.utils import resolve_dependencies
+from forerunner.queue.queue import BaseQueue
 
 from .base import Job
 
 
 class Sub(Job):
-    def __init__(self, *, queue: asyncio.Queue, **kwargs):
+    def __init__(self, *, queue: BaseQueue, **kwargs):
         super().__init__(**kwargs)
         self.queue = queue
 
@@ -16,18 +16,10 @@ class Sub(Job):
 
     async def _main(self):
         while True:
-            while len(self._worker_tasks) >= self.n_workers:
-                print("waiting for available worker...")
-                await asyncio.sleep(0.5)
+            await self._worker_sem.acquire()
 
-            # res = await self.queue.get()
-            #
-            # await self._create_worker_task(res)
+            payload = None
+            while payload is None:
+                payload = await self.queue.poll()
 
-            try:
-                res = await asyncio.wait_for(self.queue.get(), timeout=5)
-                await self._create_worker_task(res)
-            except TimeoutError:
-                print("nothing in queue")
-                await asyncio.sleep(1)
-                continue
+            await self._create_worker_task(payload=payload)

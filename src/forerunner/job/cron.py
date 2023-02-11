@@ -1,8 +1,11 @@
 import asyncio
+from contextlib import AsyncExitStack
 from datetime import datetime
 
 from croniter import croniter
 from ipdb import set_trace
+
+from forerunner.dependency.utils import resolve_dependencies
 
 from .base import Job
 
@@ -41,5 +44,6 @@ class Cron(Job):
             self.logger.debug(f"Sleeping...", seconds=sleep_sec)
             await asyncio.sleep(sleep_sec)
 
-            while len(self._worker_tasks) < self.n_workers:
+            while not self._worker_sem.locked():
+                await self._worker_sem.acquire()
                 self._create_worker_task()

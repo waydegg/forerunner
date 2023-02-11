@@ -11,7 +11,7 @@ from ipdb import set_trace
 
 from forerunner.dependency.depends import Depends
 from forerunner.dependency.utils import resolve_dependencies
-from forerunner.queue import AsyncQueue
+from forerunner.queue.queue import BasePayload, BaseQueue
 
 logger = structlog.get_logger()
 
@@ -27,7 +27,7 @@ class Job:
         n_workers: int,
         n_retries: int,
         execution: Literal["sync", "async", "thread", "process"],
-        pub: AsyncQueue | None = None,
+        pub: BaseQueue | None = None,
     ):
         self.func = func
         self.job_name = job_name
@@ -44,6 +44,8 @@ class Job:
         self._worker_tasks: List[asyncio.Task] = []
         self._exception_callback_tasks: List[asyncio.Task] = []
         self._stop_task: asyncio.Task | None = None
+
+        self._worker_sem = asyncio.BoundedSemaphore(self.n_workers)
 
     @property
     def is_stopped(self):
@@ -83,7 +85,7 @@ class Job:
 
         return dependency_kwargs
 
-    def _create_worker_task(self, *args, **kwargs):
+    def _create_worker_task(self, *, payload: BasePayload | None = None):
         def callback(task: asyncio.Task):
             self._worker_tasks.remove(task)
 
@@ -100,17 +102,23 @@ class Job:
                         self.logger.error("Exception raised by dependency")
                         raise e
 
+                    args = []
+                    if payload:
+                        args.append(payload)
+
                     # Run the job function
                     # TODO: handle running sync, async, thread, or process here
-                    res = await self.func(*args, **kwargs, **dependency_results)
+                    res = await self.func(*args, **dependency_results)
 
-                    # Publish result to any queues
+                    # Publish result to any queue(s)
                     if self.pub:
-                        if self.pub.full():
-                            logger.warning("Queue is full", queue=self.pub.__repr__())
-                        else:
-                            logger.debug("Publishing to queue")
-                            self.pub.put_nowait(res)
+                        await self.pub.push(res)
+
+                    # MONKEY PATCH (for `Sub` jobs)
+                    is_sub = hasattr(self, "queue")
+                    if is_sub and payload is not None:
+                        queue = cast(BaseQueue, getattr(self, "queue"))
+                        await queue.ack(payload)
 
             except asyncio.CancelledError as e:
                 pass
@@ -132,6 +140,8 @@ class Job:
                 # TODO: implement retrying logic and don't shutdown entire Job on 1
                 # unhandled Exception
                 self.stop()
+            finally:
+                self._worker_sem.release()
 
         self.logger.debug("Running func...")
 

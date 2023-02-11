@@ -1,4 +1,7 @@
 import asyncio
+from abc import ABC
+from dataclasses import dataclass
+from typing import Any
 
 
 class AsyncQueue(asyncio.Queue):
@@ -12,3 +15,28 @@ class AsyncQueue(asyncio.Queue):
         parts_str = " ".join(parts)
 
         return f"<AsyncQueue({self.name or ''}) at {memory_addr} ({parts_str})>"
+
+
+# class BasePayload(ABC):
+#     @property
+#     def ack_id(self) -> Any:
+#         ...
+
+
+@dataclass
+class BasePayload:
+    ack_id: Any
+
+
+class BaseQueue:
+    def __init__(self):
+        ...
+
+    async def poll(self) -> BasePayload | None:
+        ...
+
+    async def push(self, payload):
+        ...
+
+    async def ack(self, payload):
+        ...
