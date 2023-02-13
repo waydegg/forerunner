@@ -5,7 +5,8 @@ from typing import Callable, List, Literal
 
 from ipdb import set_trace
 
-from .job import Cron
+from .job import Cron, Sub
+from .queue import BaseQueue
 
 
 class Module:
@@ -20,7 +21,7 @@ class Module:
         self.modules = modules
         self.exception_callbacks = exception_callbacks
 
-        self.job_partials: List[partial[Cron]] = []
+        self.job_partials: List[partial[Cron] | partial[Sub]] = []
 
     def cron(
         self,
@@ -30,8 +31,8 @@ class Module:
         n_retries: int = 0,
         execution: Literal["sync", "async", "thread", "process"] = "async",
         eager: bool = False,
-        strategy: Literal["burst", "overlap"] = "burst",
         exception_callbacks: List[Callable] = [],
+        pub: BaseQueue | None = None,
     ):
         def _cron_wrapper(func: Callable):
             job_partial = partial(
@@ -45,7 +46,7 @@ class Module:
                 n_retries=n_retries,
                 execution=execution,
                 eager=eager,
-                strategy=strategy,
+                pub=pub,
             )
             self.job_partials.append(job_partial)
             return func
@@ -55,5 +56,30 @@ class Module:
     def timer(self):
         raise NotImplementedError
 
-    def sub(self):
-        raise NotImplementedError
+    def sub(
+        self,
+        queue: BaseQueue,
+        *,
+        n_workers: int = 1,
+        n_retries: int = 0,
+        execution: Literal["sync", "async", "thread", "process"] = "async",
+        exception_callbacks: List[Callable] = [],
+        pub: BaseQueue | None = None,
+    ):
+        def _sub_wrapper(func: Callable):
+            job_partial = partial(
+                Sub,
+                func=func,
+                app_name=self.name,
+                job_name=func.__name__,
+                exception_callbacks=exception_callbacks,
+                queue=queue,
+                n_workers=n_workers,
+                n_retries=n_retries,
+                execution=execution,
+                pub=pub,
+            )
+            self.job_partials.append(job_partial)
+            return func
+
+        return _sub_wrapper

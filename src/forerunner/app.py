@@ -92,6 +92,7 @@ class App:
         n_retries: int = 0,
         execution: Literal["sync", "async", "thread", "process"] = "async",
         exception_callbacks: List[Callable] = [],
+        pub: BaseQueue | None = None,
     ):
         def _sub_wrapper(func: Callable):
             job = Sub(
@@ -103,6 +104,7 @@ class App:
                 n_workers=n_workers,
                 n_retries=n_retries,
                 execution=execution,
+                pub=pub,
             )
             self.jobs.append(job)
             return func

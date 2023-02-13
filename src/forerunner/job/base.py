@@ -102,16 +102,16 @@ class Job:
                         self.logger.error("Exception raised by dependency")
                         raise e
 
-                    args = []
+                    func_args = []
                     if payload:
-                        args.append(payload)
+                        func_args.append(payload)
 
                     # Run the job function
                     # TODO: handle running sync, async, thread, or process here
-                    res = await self.func(*args, **dependency_results)
+                    res = await self.func(*func_args, **dependency_results)
 
                     # Publish result to any queue(s)
-                    if self.pub:
+                    if self.pub and res is not None:
                         await self.pub.push(res)
 
                     # MONKEY PATCH (for `Sub` jobs)
@@ -169,11 +169,7 @@ class Job:
         self._task = asyncio.create_task(start_())
 
     def stop(self):
-        # Job already stopping
-        if self._stop_task is not None:
-            return
-        # Job already stopped
-        if self.is_stopped:
+        if self._stop_task is not None or self.is_stopped:
             return
 
         async def stop_():
@@ -184,10 +180,6 @@ class Job:
                 self._task.cancel()
                 while self._task is not None:
                     await asyncio.sleep(0.1)
-                    # # NOTE: `.cancel` has to be called twice for Sub whenever there's a
-                    # # worker still running
-                    # if self._task is not None:
-                    #     self._task.cancel()
 
                 # Wait for worker tasks and exception callback tasks to finish
                 self.logger.debug("Waiting for worker and exception callback tasks...")
