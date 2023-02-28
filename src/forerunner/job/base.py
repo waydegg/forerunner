@@ -4,7 +4,7 @@ import sys
 import traceback
 from contextlib import AsyncExitStack
 from functools import cache
-from typing import Callable, Dict, List, Literal, cast
+from typing import Any, Callable, Dict, List, Literal, cast
 
 import structlog
 from ipdb import set_trace
@@ -89,6 +89,25 @@ class Job:
         def callback(task: asyncio.Task):
             self._worker_tasks.remove(task)
 
+        async def retry_func_wrapper(*args, **kwargs):
+            n_attempt = 0
+            while n_attempt <= self.n_retries:
+                try:
+                    res = await self.func(*args, **kwargs)
+                except Exception:
+                    exc_info = sys.exc_info()
+                    traceback_str = "".join(traceback.format_exception(*exc_info))
+                    self.logger.error(
+                        "Exception raised by wrapped func. Retrying...",
+                        n_attempt=n_attempt,
+                        traceback=traceback_str,
+                    )
+                    n_attempt += 1
+                else:
+                    return (True, res)
+
+            return (False, None)
+
         async def run_func():
             try:
                 # Enter context manager stacks (for any dependencies)
@@ -108,7 +127,12 @@ class Job:
 
                     # Run the job function
                     # TODO: handle running sync, async, thread, or process here
-                    res = await self.func(*func_args, **dependency_results)
+
+                    is_success, res = await retry_func_wrapper(
+                        *func_args, **dependency_results
+                    )
+                    if not is_success:
+                        raise Exception(f"Max retries reached ({self.n_retries})")
 
                     # Publish result to any queue(s)
                     if self.pub and res is not None:
