@@ -127,22 +127,22 @@ class Job:
 
                     # Run the job function
                     # TODO: handle running sync, async, thread, or process here
-
                     is_success, res = await retry_func_wrapper(
                         *func_args, **dependency_results
                     )
+
                     if not is_success:
-                        raise Exception(f"Max retries reached ({self.n_retries})")
+                        logger.warning("Max retries reached", n_retries=self.n_retries)
+                    else:
+                        # Publish result to any queue(s)
+                        if self.pub and res is not None:
+                            await self.pub.push(res)
 
-                    # Publish result to any queue(s)
-                    if self.pub and res is not None:
-                        await self.pub.push(res)
-
-                    # MONKEY PATCH (for `Sub` jobs)
-                    is_sub = hasattr(self, "queue")
-                    if is_sub and payload is not None:
-                        queue = cast(BaseQueue, getattr(self, "queue"))
-                        await queue.ack(payload)
+                        # MONKEY PATCH (for `Sub` jobs)
+                        is_sub = hasattr(self, "queue")
+                        if is_sub and payload is not None:
+                            queue = cast(BaseQueue, getattr(self, "queue"))
+                            await queue.ack(payload)
 
             except asyncio.CancelledError as e:
                 pass

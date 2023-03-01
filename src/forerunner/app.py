@@ -3,7 +3,6 @@ import signal
 from inspect import iscoroutinefunction
 from typing import Callable, List, Literal
 
-from ipdb import set_trace
 from structlog import get_logger
 
 from forerunner.job.sub import Sub
@@ -11,7 +10,6 @@ from forerunner.queue.queue import BaseQueue
 
 from .job import Cron
 from .module import Module
-from .queue import AsyncQueue
 from .utils import init_module_jobs
 
 
