@@ -16,8 +16,8 @@ from .utils import init_module_jobs
 class App:
     def __init__(
         self,
-        *,
         name: str = "app",
+        *,
         modules: List[Module] = [],
         exception_callbacks: List[Callable] = [],
     ):

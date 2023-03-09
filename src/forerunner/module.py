@@ -12,8 +12,8 @@ from .queue import BaseQueue
 class Module:
     def __init__(
         self,
-        *,
         name: str,
+        *,
         modules: List[Module] = [],
         exception_callbacks: List[Callable] = [],
     ):
