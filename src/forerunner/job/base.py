@@ -1,14 +1,12 @@
 import asyncio
 import inspect
-import sys
-import traceback
 from contextlib import AsyncExitStack
 from functools import cache
-from typing import Any, Callable, Dict, List, Literal, cast
+from typing import Callable, Dict, List, Literal, cast
 
 import structlog
-from ipdb import set_trace
 
+from forerunner.console import console
 from forerunner.dependency.depends import Depends
 from forerunner.dependency.utils import resolve_dependencies
 from forerunner.queue.queue import BasePayload, BaseQueue
@@ -95,13 +93,12 @@ class Job:
                 try:
                     res = await self.func(*args, **kwargs)
                 except Exception:
-                    exc_info = sys.exc_info()
-                    traceback_str = "".join(traceback.format_exception(*exc_info))
                     self.logger.error(
                         "Exception raised by wrapped func. Retrying...",
                         n_attempt=n_attempt,
-                        traceback=traceback_str,
                     )
+                    console.print_exception()
+
                     n_attempt += 1
                 else:
                     return (True, res)
@@ -147,11 +144,10 @@ class Job:
             except asyncio.CancelledError as e:
                 pass
             except Exception as e:
-                exc_info = sys.exc_info()
-                traceback_str = "".join(traceback.format_exception(*exc_info))
                 self.logger.error(
-                    "Exception rasied by wrapped func", traceback=traceback_str
+                    "Exception rasied by wrapped func", func=self.func.__name__
                 )
+                console.print_exception()
 
                 # TODO: remove exception_callbacks on finish
                 # for cb in self.exception_callbacks:
