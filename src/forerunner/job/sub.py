@@ -1,6 +1,4 @@
-from contextlib import AsyncExitStack
 
-from forerunner.dependency.utils import resolve_dependencies
 from forerunner.queue.queue import BaseQueue
 
 from .base import Job

@@ -9,4 +9,4 @@
 
 - https://github.com/samuelcolvin/arq
 - https://github.com/long2ice/rearq
-- https://github.com/tobymao/saqkk
+- https://github.com/tobymao/saq

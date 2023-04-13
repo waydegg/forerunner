@@ -3,7 +3,6 @@ from __future__ import annotations
 from functools import partial
 from typing import Callable, List, Literal
 
-from ipdb import set_trace
 
 from .job import Cron, Sub
 from .queue import BaseQueue
