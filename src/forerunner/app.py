@@ -4,7 +4,6 @@ from inspect import iscoroutinefunction
 from typing import Callable, List, Literal
 
 import uvicorn
-from ipdb import set_trace
 from prometheus_client import make_asgi_app
 from structlog import get_logger
 
