@@ -3,10 +3,14 @@ import signal
 from inspect import iscoroutinefunction
 from typing import Callable, List, Literal
 
+import uvicorn
+from ipdb import set_trace
+from prometheus_client import make_asgi_app
 from structlog import get_logger
 
 from forerunner.job.sub import Sub
 from forerunner.queue.queue import BaseQueue
+from forerunner.server import MetricsServer
 
 from .job import Cron
 from .module import Module
@@ -20,10 +24,15 @@ class App:
         *,
         modules: List[Module] = [],
         exception_callbacks: List[Callable] = [],
+        prometheus_enabled: bool = False,
     ):
         self.name = name
         self.modules = modules
         self.exception_callbacks = exception_callbacks
+        self.prometheus_enabled = prometheus_enabled
+
+        self._prometheus_asgi_server: MetricsServer | None = None
+        self._prometheus_asgi_task: asyncio.Task | None = None
 
         self.logger = get_logger(app=self.name)
         self.jobs = []
@@ -110,6 +119,16 @@ class App:
         return _sub_wrapper
 
     async def startup(self):
+        if self.prometheus_enabled:
+            self.logger.debug("Starting prometheus web server...")
+            asgi_app = make_asgi_app()
+            config = uvicorn.Config(asgi_app, port=8003)
+            self._prometheus_asgi_server = MetricsServer(config)
+            self._prometheus_asgi_app_task = asyncio.create_task(
+                self._prometheus_asgi_server.serve()
+            )
+            self.logger.debug("Started prometheus web server")
+
         self.logger.info("Starting...")
         if len(self.startup_funcs) > 0:
             self.logger.debug("Running startup funcs...")
@@ -118,11 +137,12 @@ class App:
 
     async def shutdown(self):
         self.logger.info("Shutting down...")
+
+        # Stop jobs
         for job in self.jobs:
             if job.is_stopped:
                 continue
             job.stop()
-
         self.logger.info("Waiting for Jobs to finish. (CTRL+C to force quit)")
         while not self._force_exit:
             if all([job.is_stopped for job in self.jobs]):
@@ -139,11 +159,20 @@ class App:
             for func in self.shutdown_funcs:
                 await func() if iscoroutinefunction(func) else func()
 
+        # Shutdown metrics webserver
+        if self.prometheus_enabled and self._prometheus_asgi_server is not None:
+            self.logger.debug("Stopping prometheus web server...")
+            self._prometheus_asgi_server.should_exit = True
+            try:
+                await asyncio.wait_for(self._prometheus_asgi_app_task, timeout=30)
+            except asyncio.TimeoutError:
+                self._prometheus_asgi_app_task.cancel()
+            self.logger.debug("Stopped prometheus webserver")
+
         self.logger.info("App has stopped")
 
     async def _main_loop(self):
         self.logger.info("Running...")
-        self._init_signal_handlers()
 
         for job in self.jobs:
             job.start()
@@ -172,6 +201,7 @@ class App:
             loop.add_signal_handler(sig, self._handle_exit, sig)
 
     async def _run(self):
+        self._init_signal_handlers()
         await self.startup()
         await self._main_loop()
         await self.shutdown()

@@ -5,6 +5,7 @@ from functools import cache
 from typing import Callable, Dict, List, Literal, cast
 
 import structlog
+from prometheus_client import Counter
 
 from forerunner.console import console
 from forerunner.dependency.depends import Depends
@@ -44,6 +45,17 @@ class Job:
         self._stop_task: asyncio.Task | None = None
 
         self._worker_sem = asyncio.BoundedSemaphore(self.n_workers)
+
+        self._prom_run_func_success_total = Counter(
+            name=f"{self.job_name}_func_success_total",
+            documentation="Number of successful wrapped function calls",
+            namespace=f"forerunner_{self.app_name}",
+        )
+        self._prom_run_func_failure_total = Counter(
+            name=f"{self.job_name}_func_failure_total",
+            documentation="Number of failed wrapped function calls",
+            namespace=f"forerunner_{self.app_name}",
+        )
 
     @property
     def is_stopped(self):
@@ -92,7 +104,9 @@ class Job:
             while n_attempt <= self.n_retries:
                 try:
                     res = await self.func(*args, **kwargs)
+                    self._prom_run_func_success_total.inc()
                 except Exception:
+                    self._prom_run_func_failure_total.inc()
                     self.logger.error(
                         "Exception raised by wrapped func. Retrying...",
                         n_attempt=n_attempt,
