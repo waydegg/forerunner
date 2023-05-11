@@ -1,7 +1,6 @@
 import importlib
 from typing import Any, Callable, List
 
-
 from .app import Module
 
 
@@ -18,7 +17,7 @@ def init_module_jobs(
     """
     jobs = []
 
-    parent_app_name = f"{app_name}.{module.name}"
+    parent_app_name = f"{app_name}_{module.name}"
     parent_exception_callbacks = [
         *exception_callbacks,
         *module.exception_callbacks,

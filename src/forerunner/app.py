@@ -1,5 +1,6 @@
 import asyncio
 import signal
+from concurrent.futures import ThreadPoolExecutor
 from inspect import iscoroutinefunction
 from typing import Callable, List, Literal
 
@@ -23,12 +24,16 @@ class App:
         *,
         modules: List[Module] = [],
         exception_callbacks: List[Callable] = [],
-        prometheus_enabled: bool = False,
+        metrics_server_enabled: bool = False,
+        metrics_server_port: int = 8001,
     ):
         self.name = name
         self.modules = modules
         self.exception_callbacks = exception_callbacks
-        self.prometheus_enabled = prometheus_enabled
+        self.metrics_server_enabled = metrics_server_enabled
+        self.metrics_server_port = metrics_server_port
+
+        self.threadpool_executor = ThreadPoolExecutor(max_workers=5)
 
         self._prometheus_asgi_server: MetricsServer | None = None
         self._prometheus_asgi_task: asyncio.Task | None = None
@@ -118,10 +123,10 @@ class App:
         return _sub_wrapper
 
     async def startup(self):
-        if self.prometheus_enabled:
+        if self.metrics_server_enabled:
             self.logger.debug("Starting prometheus web server...")
             asgi_app = make_asgi_app()
-            config = uvicorn.Config(asgi_app, port=8003)
+            config = uvicorn.Config(asgi_app, port=self.metrics_server_port)
             self._prometheus_asgi_server = MetricsServer(config)
             self._prometheus_asgi_app_task = asyncio.create_task(
                 self._prometheus_asgi_server.serve()
@@ -159,7 +164,7 @@ class App:
                 await func() if iscoroutinefunction(func) else func()
 
         # Shutdown metrics webserver
-        if self.prometheus_enabled and self._prometheus_asgi_server is not None:
+        if self.metrics_server_enabled and self._prometheus_asgi_server is not None:
             self.logger.debug("Stopping prometheus web server...")
             self._prometheus_asgi_server.should_exit = True
             try:
