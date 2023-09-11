@@ -1,185 +1,76 @@
 import asyncio
 import signal
-from concurrent.futures import ThreadPoolExecutor
 from inspect import iscoroutinefunction
-from typing import Callable, List, Literal
+from typing import Callable, Iterable, List, Literal, Optional, Union
 
-import uvicorn
-from prometheus_client import make_asgi_app
 from structlog import get_logger
 
-from forerunner.job.sub import Sub
-from forerunner.queue.queue import BaseQueue
-from forerunner.server import MetricsServer
+from .runner import Cron
 
-from .job import Cron
-from .module import Module
-from .utils import init_module_jobs
+logger = get_logger("forerunner")
 
 
-class App:
+class Forerunner:
     def __init__(
         self,
-        name: str = "app",
-        *,
-        modules: List[Module] = [],
-        exception_callbacks: List[Callable] = [],
-        metrics_server_enabled: bool = False,
-        metrics_server_port: int = 8001,
+        on_startup: Optional[List[Callable]] = None,
+        on_shutdown: Optional[List[Callable]] = None,
+        runners: Optional[List[Cron]] = None,
     ):
-        self.name = name
-        self.modules = modules
-        self.exception_callbacks = exception_callbacks
-        self.metrics_server_enabled = metrics_server_enabled
-        self.metrics_server_port = metrics_server_port
-
-        self.threadpool_executor = ThreadPoolExecutor(max_workers=5)
-
-        self._prometheus_asgi_server: MetricsServer | None = None
-        self._prometheus_asgi_task: asyncio.Task | None = None
-
-        self.logger = get_logger(app=self.name)
-        self.jobs = []
-
-        for module in self.modules:
-            module_jobs = init_module_jobs(
-                app_name=self.name,
-                exception_callbacks=self.exception_callbacks,
-                module=module,
-            )
-            self.jobs.extend(module_jobs)
-
-        self.startup_funcs = []
-        self.shutdown_funcs = []
+        self.on_startup = on_startup if on_startup else []
+        self.on_shutdown = on_shutdown if on_shutdown else []
+        self.runners = runners if runners else []
 
         self._should_exit = False
         self._force_exit = False
 
-    def on_startup(self, func: Callable):
-        self.startup_funcs.append(func)
-        return func
-
-    def on_shutdown(self, func: Callable):
-        self.shutdown_funcs.append(func)
-        return func
-
-    def cron(
-        self,
-        expr: str,
-        *,
-        n_workers: int = 1,
-        n_retries: int = 0,
-        execution: Literal["sync", "async", "thread", "process"] = "async",
-        eager: bool = False,
-        exception_callbacks: List[Callable] = [],
-        pub: BaseQueue | None = None,
-    ):
-        def _cron_wrapper(func: Callable):
-            job = Cron(
-                func=func,
-                job_name=func.__name__,
-                app_name=self.name,
-                exception_callbacks=exception_callbacks,
-                expr=expr,
-                n_workers=n_workers,
-                n_retries=n_retries,
-                execution=execution,
-                eager=eager,
-                pub=pub,
-            )
-            self.jobs.append(job)
-            return func
-
-        return _cron_wrapper
-
-    def timer(self):
-        raise NotImplementedError
-
-    def sub(
-        self,
-        queue: BaseQueue,
-        *,
-        n_workers: int = 1,
-        n_retries: int = 0,
-        execution: Literal["sync", "async", "thread", "process"] = "async",
-        exception_callbacks: List[Callable] = [],
-        pub: BaseQueue | None = None,
-    ):
-        def _sub_wrapper(func: Callable):
-            job = Sub(
-                func=func,
-                job_name=func.__name__,
-                app_name=self.name,
-                queue=queue,
-                exception_callbacks=exception_callbacks,
-                n_workers=n_workers,
-                n_retries=n_retries,
-                execution=execution,
-                pub=pub,
-            )
-            self.jobs.append(job)
-            return func
-
-        return _sub_wrapper
-
     async def startup(self):
-        if self.metrics_server_enabled:
-            self.logger.debug("Starting prometheus web server...")
-            asgi_app = make_asgi_app()
-            config = uvicorn.Config(asgi_app, port=self.metrics_server_port)
-            self._prometheus_asgi_server = MetricsServer(config)
-            self._prometheus_asgi_app_task = asyncio.create_task(
-                self._prometheus_asgi_server.serve()
-            )
-            self.logger.debug("Started prometheus web server")
-
-        self.logger.info("Starting...")
-        if len(self.startup_funcs) > 0:
-            self.logger.debug("Running startup funcs...")
-            for func in self.startup_funcs:
-                await func() if iscoroutinefunction(func) else func()
+        logger.info("Starting...")
+        if self.on_startup is not None:
+            if isinstance(self.on_startup, list):
+                for func in self.on_startup:
+                    await func() if iscoroutinefunction(func) else func()
+            else:
+                await self.on_startup() if iscoroutinefunction(
+                    self.on_startup
+                ) else self.on_startup()
 
     async def shutdown(self):
-        self.logger.info("Shutting down...")
+        logger.info("Shutting down...")
 
-        # Stop jobs
-        for job in self.jobs:
-            if job.is_stopped:
+        # Stop runners
+        for runner in self.runners:
+            if runner.is_stopped:
                 continue
-            job.stop()
-        self.logger.info("Waiting for Jobs to finish. (CTRL+C to force quit)")
+            runner.stop()
+        logger.info("Waiting for Jobs to finish. (CTRL+C to force quit)")
         while not self._force_exit:
-            if all([job.is_stopped for job in self.jobs]):
+            if all([runner.is_stopped for runner in self.runners]):
                 break
             await asyncio.sleep(0.1)
 
         if self._force_exit:
-            self.logger.debug("Force exiting. Canceling all jobs...")
-            for job in self.jobs:
-                job.cancel()
+            logger.debug("Force exiting. Canceling all Jobs...")
+            for runner in self.runners:
+                runner.cancel()
 
-        if len(self.shutdown_funcs) > 0:
-            self.logger.debug("Running shutdown funcs...")
-            for func in self.shutdown_funcs:
-                await func() if iscoroutinefunction(func) else func()
+        if self.on_shutdown is not None:
+            if isinstance(self.on_shutdown, list):
+                logger.debug("Running shutdown funcs...")
+                for func in self.on_shutdown:
+                    await func() if iscoroutinefunction(func) else func()
+            else:
+                await self.on_shutdown() if iscoroutinefunction(
+                    self.on_shutdown
+                ) else self.on_shutdown()
 
-        # Shutdown metrics webserver
-        if self.metrics_server_enabled and self._prometheus_asgi_server is not None:
-            self.logger.debug("Stopping prometheus web server...")
-            self._prometheus_asgi_server.should_exit = True
-            try:
-                await asyncio.wait_for(self._prometheus_asgi_app_task, timeout=30)
-            except asyncio.TimeoutError:
-                self._prometheus_asgi_app_task.cancel()
-            self.logger.debug("Stopped prometheus webserver")
-
-        self.logger.info("App has stopped")
+        logger.info("App has stopped")
 
     async def _main_loop(self):
-        self.logger.info("Running...")
+        logger.info("Running...")
 
-        for job in self.jobs:
-            job.start()
+        for runner in self.runners:
+            runner.start()
 
         counter = 0
         while not self._should_exit:
@@ -187,13 +78,13 @@ class App:
             counter = counter % 86400
 
             # Break if all asyncio tasks (of each job) have finished
-            if all([j.is_stopped for j in self.jobs]):
+            if all([runner.is_stopped for runner in self.runners]):
                 self._should_exit = True
                 break
 
             await asyncio.sleep(0.1)
 
-    def _handle_exit(self, sig):
+    def _handle_exit(self):
         if self._should_exit:
             self._force_exit = True
         else:
@@ -201,8 +92,8 @@ class App:
 
     def _init_signal_handlers(self):
         loop = asyncio.get_event_loop()
-        for sig in [signal.SIGINT, signal.SIGTERM]:
-            loop.add_signal_handler(sig, self._handle_exit, sig)
+        loop.add_signal_handler(signal.SIGINT, self._handle_exit)
+        loop.add_signal_handler(signal.SIGTERM, self._handle_exit)
 
     async def _run(self):
         self._init_signal_handlers()

@@ -1,43 +1,10 @@
+from __future__ import annotations
+
 import importlib
+import time
+import uuid
+from random import random
 from typing import Any, Callable, List
-
-from .app import Module
-
-
-def init_module_jobs(
-    *,
-    app_name: str,
-    exception_callbacks: List[Callable],
-    module: Module,
-):
-    """Recursively instantiate jobs for a Module
-
-    The `app_name` and `exception_callbacks` kwargs are appended to each module's jobs
-    and recursively updated to each modules children modules.
-    """
-    jobs = []
-
-    parent_app_name = f"{app_name}_{module.name}"
-    parent_exception_callbacks = [
-        *exception_callbacks,
-        *module.exception_callbacks,
-    ]
-
-    for job_partial in module.job_partials:
-        job_partial.keywords["app_name"] = parent_app_name
-        job_partial.keywords["exception_callbacks"].extend(parent_exception_callbacks)
-        job = job_partial()
-        jobs.append(job)
-
-    for child_module in module.modules:
-        child_module_jobs = init_module_jobs(
-            app_name=parent_app_name,
-            exception_callbacks=parent_exception_callbacks,
-            module=child_module,
-        )
-        jobs.extend(child_module_jobs)
-
-    return jobs
 
 
 class ImportFromStringError(Exception):
@@ -74,3 +41,41 @@ def import_from_string(import_str: Any) -> Any:
         )
 
     return instance
+
+
+def now() -> int:
+    return int(time.time() * 1000)
+
+
+def uuid1() -> str:
+    return str(uuid.uuid1())
+
+
+def millis(s: float) -> float:
+    return s * 1000
+
+
+def seconds(ms: float) -> float:
+    return ms / 1000
+
+
+def exponential_backoff(
+    attempts: int,
+    base_delay: float,
+    max_delay: float | None = None,
+    jitter: bool = True,
+) -> float:
+    """
+    Get the next delay for retries in exponential backoff.
+
+    attempts: Number of attempts so far
+    base_delay: Base delay, in seconds
+    max_delay: Max delay, in seconds. If None (default), there is no max.
+    jitter: If True, add a random jitter to the delay
+    """
+    if max_delay is None:
+        max_delay = float("inf")
+    backoff = min(max_delay, base_delay * 2 ** max(attempts - 1, 0))
+    if jitter:
+        backoff = backoff * random()
+    return backoff
